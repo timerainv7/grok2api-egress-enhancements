@@ -1,0 +1,57 @@
+name: grok2api
+
+services:
+  grok2api:
+    container_name: grok2api
+    image: "${GROK2API_IMAGE:-ghcr.io/timerainv7/grok2api-egress-enhancements:deploy-egress-enhancements}"
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      TZ: "${TZ:-Asia/Shanghai}"
+    volumes:
+      - "${GROK2API_CONFIG:-./config.yaml}:/run/grok2api/config.yaml:ro"
+      - grok2api-data:/app/data
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - ai_gateway
+
+  # ================================ WARP ================================
+  # 如果出口 IP 不干净，可取消以下注释使用 WARP 作为落地代理。
+  # 启用后，在管理端“设置 -> 出口代理”中新增 socks5://warp:1080。
+
+  # warp:
+  #   container_name: warp
+  #   image: caomingjun/warp:latest
+  #   profiles: ["warp"]
+  #   restart: unless-stopped
+  #   ports:
+  #     - "127.0.0.1:1080:1080"
+  #   environment:
+  #     - WARP_SLEEP=2
+  #   cap_add:
+  #     - NET_ADMIN
+
+  # ================================ FLARESOLVERR ================================
+  # 在管理端将 Clearance 模式设为 FlareSolverr，并使用 http://flaresolverr:8191。
+  # 启动命令：docker compose --profile flaresolverr up -d
+  # Podman：podman compose --profile flaresolverr up -d
+
+  # flaresolverr:
+  #   container_name: flaresolverr
+  #   image: ghcr.io/flaresolverr/flaresolverr:latest
+  #   profiles: ["flaresolverr"]
+  #   environment:
+  #     TZ: Asia/Shanghai
+  #     LOG_LEVEL: info
+  #   restart: unless-stopped
+
+volumes:
+  grok2api-data:
+
+networks:
+  ai_gateway:
+    name: ai-gateway-network
