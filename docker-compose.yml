@@ -18,6 +18,7 @@ services:
       - no-new-privileges:true
     networks:
       - ai_gateway
+      - grok2api_upstream
 
   # ================================ WARP ================================
   # 如果出口 IP 不干净，可取消以下注释使用 WARP 作为落地代理。
@@ -55,3 +56,6 @@ volumes:
 networks:
   ai_gateway:
     name: ai-gateway-network
+  grok2api_upstream:
+    name: grok2api-upstream-network
+    external: true
