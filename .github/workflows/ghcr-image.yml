@@ -207,11 +207,11 @@ jobs:
         shell: bash
         run: |
           jq -cr '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON" | while read -r tag; do
-            docker manifest create "$tag" \
+            docker buildx imagetools create \
+              -t "$tag" \
               "${tag}-amd64" \
               "${tag}-arm64"
-            docker manifest push "$tag"
           done
 
       - name: Inspect image
-        run: docker manifest inspect "${{ steps.image.outputs.name }}:${{ steps.meta.outputs.version }}"
+        run: docker buildx imagetools inspect "${{ steps.image.outputs.name }}:${{ steps.meta.outputs.version }}"
