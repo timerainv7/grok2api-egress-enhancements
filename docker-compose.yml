@@ -23,6 +23,7 @@ services:
     networks:
       - default
       - grok2api_upstream
+      - ai_gateway
 
   # ================================ WARP ================================
   # 如果出口 IP 不干净，可取消以下注释使用 WARP 作为落地代理。
@@ -76,11 +77,70 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # Dedicated Mihomo instance for Grok Build. It reuses the subscription
+  # configuration but maintains its own runtime selector and never changes
+  # the shared Mihomo instance used by the other applications.
+  mihomo-grok:
+    container_name: mihomo-grok
+    image: docker.io/metacubex/mihomo:latest
+    command: ["-d", "/root/.config/mihomo"]
+    volumes:
+      - /home/ubuntu/apps/server/mihomo/config.yaml:/root/.config/mihomo/config.yaml:ro
+      - mihomo_grok_runtime:/root/.config/mihomo
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+  # Observes the official quality guard state and rotates only the dedicated
+  # Mihomo selector after confirmed anomalies. It has no access to the shared
+  # Mihomo instance and cannot disable the Grok2API egress node.
+  mihomo-grok-rotator:
+    container_name: mihomo-grok-rotator
+    build:
+      context: .
+      dockerfile: tools/mihomo-grok-rotator/Dockerfile
+    depends_on:
+      mihomo-grok:
+        condition: service_started
+      egress-quality-guard:
+        condition: service_started
+    environment:
+      MIHOMO_CONTROLLER: http://mihomo-grok:9090
+      MIHOMO_CONFIG_FILE: /etc/mihomo/config.yaml
+      # Grok Build's cli-chat-proxy.grok.com rule resolves to this selector.
+      MIHOMO_SELECTOR: "🐟 漏网之鱼"
+      MIHOMO_TARGET_URL: https://cli-chat-proxy.grok.com
+      QUALITY_GUARD_STATE_FILE: /var/lib/grok2api-quality-guard/state.json
+      ROTATOR_STATE_FILE: /var/lib/mihomo-grok-rotator/state.json
+      ROTATOR_POLL_SECONDS: "15"
+      ROTATOR_HARD_REQUIRED: "2"
+      ROTATOR_SOFT_REQUIRED: "2"
+      ROTATOR_ERROR_REQUIRED: "2"
+      ROTATOR_GLOBAL_COOLDOWN_SECONDS: "900"
+      ROTATOR_NODE_COOLDOWN_SECONDS: "3600"
+      ROTATOR_MAX_CANDIDATES: "8"
+    volumes:
+      - /home/ubuntu/apps/server/mihomo/config.yaml:/etc/mihomo/config.yaml:ro
+      - quality_guard_state:/var/lib/grok2api-quality-guard:ro
+      - mihomo_grok_rotator_state:/var/lib/mihomo-grok-rotator
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   grok2api-data:
   quality_guard_state:
+  mihomo_grok_runtime:
+  mihomo_grok_rotator_state:
 
 networks:
+  ai_gateway:
+    name: ai-gateway-network
+    external: true
   grok2api_upstream:
     name: grok2api-upstream-network
     external: true
