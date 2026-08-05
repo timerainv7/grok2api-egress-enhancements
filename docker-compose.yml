@@ -3,7 +3,7 @@ name: grok2api
 services:
   grok2api:
     container_name: grok2api
-    image: "${GROK2API_IMAGE:-ghcr.io/chenyme/grok2api:latest}"
+    image: "${GROK2API_IMAGE:-ghcr.io/chenyme/grok2api:v3.1.0}"
     ports:
       - "${GROK2API_PORT:-8000}:8000"
     environment:
@@ -20,6 +20,9 @@ services:
     stop_grace_period: 30s
     security_opt:
       - no-new-privileges:true
+    networks:
+      - default
+      - grok2api_upstream
 
   # ================================ WARP ================================
   # 如果出口 IP 不干净，可取消以下注释使用 WARP 作为落地代理。
@@ -76,3 +79,8 @@ services:
 volumes:
   grok2api-data:
   quality_guard_state:
+
+networks:
+  grok2api_upstream:
+    name: grok2api-upstream-network
+    external: true

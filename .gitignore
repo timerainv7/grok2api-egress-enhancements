@@ -49,4 +49,5 @@ __pycache__/
 /release/
 /.tmp/
 /tmp/
+/deploy-secrets/
 /Dockerfile.local
