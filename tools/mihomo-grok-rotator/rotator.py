@@ -40,6 +40,12 @@ ERROR_REQUIRED = env_int("ROTATOR_ERROR_REQUIRED", 2)
 GLOBAL_COOLDOWN = env_int("ROTATOR_GLOBAL_COOLDOWN_SECONDS", 900)
 NODE_COOLDOWN = env_int("ROTATOR_NODE_COOLDOWN_SECONDS", 3600)
 MAX_CANDIDATES = env_int("ROTATOR_MAX_CANDIDATES", 8)
+# A selector change is normally non-disruptive to established Mihomo
+# connections, but wait for Grok traffic to become quiet before changing it.
+# Grok2API keeps HTTP connections alive, so connection existence alone is not
+# enough: bytes must remain unchanged for this whole window.
+DRAIN_QUIET_SECONDS = env_int("ROTATOR_DRAIN_QUIET_SECONDS", 30)
+TARGET_HOST = (urllib.parse.urlparse(TARGET_URL).hostname or "").lower()
 
 
 def log(event: str, **fields: Any) -> None:
@@ -64,7 +70,7 @@ def save_state(state: dict[str, Any]) -> None:
 
 def default_state() -> dict[str, Any]:
     return {
-        "version": 1,
+        "version": 2,
         "initialized": False,
         "last_observed_at": 0.0,
         "last_error_strikes": 0,
@@ -73,6 +79,8 @@ def default_state() -> dict[str, Any]:
         "last_rotation_at": 0.0,
         "last_selected": "",
         "node_cooldowns": {},
+        "pending_rotation_reason": "",
+        "target_connections": {},
     }
 
 
@@ -105,6 +113,47 @@ def proxy_map() -> dict[str, dict[str, Any]]:
     return values if isinstance(values, dict) else {}
 
 
+def update_target_connection_activity(state: dict[str, Any]) -> int:
+    """Track byte movement for connections to the Grok Build upstream.
+
+    Mihomo's controller includes idle keep-alive connections in /connections.
+    Treating every one as a live stream would prevent rotation indefinitely;
+    this records the last time traffic moved instead.
+    """
+    data = request("GET", "/connections")
+    connections = data.get("connections", []) if isinstance(data, dict) else []
+    previous = state.get("target_connections") or {}
+    current: dict[str, dict[str, float]] = {}
+    now = time.time()
+    for item in connections:
+        if not isinstance(item, dict):
+            continue
+        metadata = item.get("metadata") or {}
+        if not isinstance(metadata, dict) or str(metadata.get("host") or "").lower() != TARGET_HOST:
+            continue
+        connection_id = str(item.get("id") or "")
+        if not connection_id:
+            continue
+        byte_count = float(item.get("upload") or 0) + float(item.get("download") or 0)
+        prior = previous.get(connection_id) if isinstance(previous, dict) else None
+        if not isinstance(prior, dict) or float(prior.get("bytes") or -1) != byte_count:
+            last_activity_at = now
+        else:
+            last_activity_at = float(prior.get("last_activity_at") or now)
+        current[connection_id] = {"bytes": byte_count, "last_activity_at": last_activity_at}
+    state["target_connections"] = current
+    return sum(1 for item in current.values() if now - item["last_activity_at"] < DRAIN_QUIET_SECONDS)
+
+
+def rotation_is_safe(state: dict[str, Any]) -> bool:
+    active_count = update_target_connection_activity(state)
+    if active_count:
+        log("rotation_deferred", reason=state.get("pending_rotation_reason") or "", active_grok_connections=active_count, quiet_seconds=DRAIN_QUIET_SECONDS)
+        save_state(state)
+        return False
+    return True
+
+
 def eligible_leaves(values: dict[str, dict[str, Any]]) -> tuple[str, list[str]]:
     group = values.get(SELECTOR)
     if not isinstance(group, dict):
@@ -130,9 +179,13 @@ def is_healthy_candidate(name: str) -> bool:
 
 
 def rotate(state: dict[str, Any], reason: str) -> bool:
+    state["pending_rotation_reason"] = reason
+    if not rotation_is_safe(state):
+        return False
     now = time.time()
     if now - float(state.get("last_rotation_at") or 0) < GLOBAL_COOLDOWN:
         log("rotation_suppressed", reason=reason, suppression="global_cooldown")
+        save_state(state)
         return False
     values = proxy_map()
     current, candidates = eligible_leaves(values)
@@ -163,6 +216,7 @@ def rotate(state: dict[str, Any], reason: str) -> bool:
         "soft_streak": 0,
         "hard_streak": 0,
         "last_error_strikes": 0,
+        "pending_rotation_reason": "",
     })
     save_state(state)
     log("node_rotated", reason=reason, previous=current, selected=selected)
@@ -237,6 +291,13 @@ def observe(state: dict[str, Any], guard: dict[str, Any]) -> None:
         log("observation_recorded", classification=classification, soft_streak=state["soft_streak"], hard_streak=state["hard_streak"])
 
 
+def process_pending_rotation(state: dict[str, Any]) -> None:
+    """Revisit a confirmed rotation after an active response has drained."""
+    reason = str(state.get("pending_rotation_reason") or "")
+    if reason:
+        rotate(state, reason)
+
+
 def main() -> None:
     state = load_json(STATE_FILE, default_state())
     log("rotator_started", selector=SELECTOR, hard_required=HARD_REQUIRED, soft_required=SOFT_REQUIRED, error_required=ERROR_REQUIRED)
@@ -250,6 +311,7 @@ def main() -> None:
                 restore_last_selection(state)
                 restored = True
             observe(state, load_json(GUARD_STATE, {}))
+            process_pending_rotation(state)
         except Exception as exc:
             log("rotator_cycle_failed", error_type=type(exc).__name__)
         time.sleep(POLL_SECONDS)

@@ -121,6 +121,9 @@ services:
       ROTATOR_GLOBAL_COOLDOWN_SECONDS: "900"
       ROTATOR_NODE_COOLDOWN_SECONDS: "3600"
       ROTATOR_MAX_CANDIDATES: "8"
+      # Defer a confirmed rotation until Grok stream traffic has been quiet
+      # for this period; idle HTTP keep-alives do not block a rotation.
+      ROTATOR_DRAIN_QUIET_SECONDS: "120"
     volumes:
       - /home/ubuntu/apps/server/mihomo/config.yaml:/etc/mihomo/config.yaml:ro
       - quality_guard_state:/var/lib/grok2api-quality-guard:ro
