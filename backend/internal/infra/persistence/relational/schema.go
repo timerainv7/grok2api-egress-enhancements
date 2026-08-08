@@ -195,6 +195,9 @@ func (d *Database) initializeSchema(ctx context.Context) error {
 	if err := d.dropModelPublicIDUniqueIndex(ctx); err != nil {
 		return fmt.Errorf("迁移模型路由名称唯一约束: %w", err)
 	}
+	if err := d.deduplicateManagedModelRoutes(ctx); err != nil {
+		return fmt.Errorf("迁移重复的受管模型路由: %w", err)
+	}
 	for _, statement := range schemaIndexes {
 		if err := db.Exec(statement).Error; err != nil {
 			return fmt.Errorf("初始化数据库索引: %w", err)
@@ -204,6 +207,23 @@ func (d *Database) initializeSchema(ctx context.Context) error {
 		return fmt.Errorf("迁移模型 Provider 命名空间: %w", err)
 	}
 	return nil
+}
+
+// deduplicateManagedModelRoutes repairs rows produced by older catalog syncs
+// before the partial unique index is installed. Managed routes are recreated
+// from the upstream catalog, so retaining the oldest row is deterministic;
+// manually managed routes are intentionally never touched.
+func (d *Database) deduplicateManagedModelRoutes(ctx context.Context) error {
+	return d.db.WithContext(ctx).Exec(`
+DELETE FROM model_routes
+WHERE origin IN ('catalog', 'discovered')
+  AND id NOT IN (
+    SELECT MIN(id)
+    FROM model_routes
+    WHERE origin IN ('catalog', 'discovered')
+    GROUP BY public_id
+  )
+`).Error
 }
 
 // migrateClientKeyAccountScopes translates the short-lived account_pool
