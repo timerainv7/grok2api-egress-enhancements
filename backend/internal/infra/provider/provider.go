@@ -350,6 +350,9 @@ type CredentialCodecAdapter interface {
 // Raw tokens and complete JWT claims must never be exposed through this structure.
 type CredentialMetadata struct {
 	BuildBotFlagged bool
+	// BuildBFS is true only when the Build access-token JWT has numeric bfs=1.
+	// It is safe to expose as account metadata; raw credentials and claims stay private.
+	BuildBFS bool
 }
 
 type CredentialMetadataAdapter interface {

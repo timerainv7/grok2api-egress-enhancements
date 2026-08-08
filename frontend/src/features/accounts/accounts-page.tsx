@@ -142,6 +142,7 @@ export function AccountsPage() {
   const [egressFilterOptionsSearch, setEgressFilterOptionsSearch] = useState("");
   const [renewalFilter, setRenewalFilter] = useState("");
   const [riskFilter, setRiskFilter] = useState("");
+  const [bfsFilter, setBfsFilter] = useState("");
   const [agreementFilter, setAgreementFilter] = useState("");
   const [associationFilter, setAssociationFilter] = useState("");
   const [sort, setSort] = useState<TableSort>({ field: "createdAt", order: "desc" });
@@ -238,11 +239,12 @@ export function AccountsPage() {
   const selectedIdsKey = Array.from(selected).sort().join(",");
 
   const accountsQuery = useQuery({
-    queryKey: ["accounts", provider, page, pageSize, debouncedSearch, typeFilter, statusFilter, egressFilter, renewalFilter, riskFilter, agreementFilter, associationFilter, sort.field, sort.order],
+    queryKey: ["accounts", provider, page, pageSize, debouncedSearch, typeFilter, statusFilter, egressFilter, renewalFilter, riskFilter, bfsFilter, agreementFilter, associationFilter, sort.field, sort.order],
     queryFn: () => listAccounts({
       provider, page, pageSize, search: debouncedSearch, type: typeFilter, status: statusFilter, egress: egressFilter,
       renewal: provider === "grok_build" ? renewalFilter : undefined,
       risk: provider === "grok_build" ? riskFilter : undefined,
+      bfs: provider === "grok_build" ? bfsFilter : undefined,
       agreement: provider === "grok_web" ? agreementFilter : undefined,
       association: associationFilter || undefined,
       sortBy: sort.field, sortOrder: sort.order,
@@ -1009,6 +1011,7 @@ export function AccountsPage() {
     setEgressFilterOptionsSearch("");
     setRenewalFilter("");
     setRiskFilter("");
+    setBfsFilter("");
     setAgreementFilter("");
     setAssociationFilter("");
     setQuickImportOpen(false);
@@ -1377,6 +1380,10 @@ export function AccountsPage() {
                 ...(provider === "grok_build" ? [{ id: "risk", label: t("accounts.riskFilter"), value: riskFilter, onChange: (value: string) => { setRiskFilter(value); setPage(1); }, options: [
                   { value: "flagged", label: t("accounts.botRisk") },
                   { value: "normal", label: t("accounts.riskNormal") },
+                ] }] : []),
+                ...(provider === "grok_build" ? [{ id: "bfs", label: t("accounts.bfsFilter"), value: bfsFilter, onChange: (value: string) => { setBfsFilter(value); setPage(1); }, options: [
+                  { value: "present", label: t("accounts.bfsPresent") },
+                  { value: "absent", label: t("accounts.bfsAbsent") },
                 ] }] : []),
                 ...(provider === "grok_web" ? [{ id: "agreement", label: t("accounts.agreementFilter"), value: agreementFilter, onChange: (value: string) => { setAgreementFilter(value); setPage(1); }, options: [
                   { value: "nsfwEnabled", label: t("accounts.agreementNsfwEnabled") },

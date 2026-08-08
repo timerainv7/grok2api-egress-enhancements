@@ -98,8 +98,9 @@ func (a *Adapter) SetReasoningReplay(replay *reasoningreplay.ReasoningReplay) {
 
 func (a *Adapter) Provider() account.Provider { return account.ProviderBuild }
 
-// CredentialMetadata extracts only non-sensitive risk flags from a Build access token.
-// bot_flag_source must be JSON number 1; other values, malformed tokens, and decryption failures are not marked.
+// CredentialMetadata extracts only non-sensitive flags from a Build access token.
+// bot_flag_source and bfs must be JSON number 1; other values, malformed tokens,
+// and decryption failures are not marked.
 func (a *Adapter) CredentialMetadata(credential account.Credential) provider.CredentialMetadata {
 	if credential.Provider != account.ProviderBuild || a.cipher == nil || credential.EncryptedAccessToken == "" {
 		return provider.CredentialMetadata{}
@@ -108,8 +109,13 @@ func (a *Adapter) CredentialMetadata(credential account.Credential) provider.Cre
 	if err != nil {
 		return provider.CredentialMetadata{}
 	}
-	value, ok := decodeJWTClaims(accessToken)["bot_flag_source"].(float64)
-	return provider.CredentialMetadata{BuildBotFlagged: ok && value == 1}
+	claims := decodeJWTClaims(accessToken)
+	botFlagSource, botFlagged := claims["bot_flag_source"].(float64)
+	bfs, hasBFS := claims["bfs"].(float64)
+	return provider.CredentialMetadata{
+		BuildBotFlagged: botFlagged && botFlagSource == 1,
+		BuildBFS:        hasBFS && bfs == 1,
+	}
 }
 
 func (a *Adapter) UpdateConfig(cfg Config) {

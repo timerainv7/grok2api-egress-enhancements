@@ -48,10 +48,10 @@ func (s credentialMetadataAdapterStub) CredentialMetadata(credential accountdoma
 	if s.calls != nil {
 		s.calls.Add(1)
 	}
-	return provider.CredentialMetadata{BuildBotFlagged: credential.ID == 1}
+	return provider.CredentialMetadata{BuildBotFlagged: credential.ID == 1, BuildBFS: credential.ID == 2}
 }
 
-func TestBuildBotFlagSummaryUsesShortLivedCache(t *testing.T) {
+func TestBuildCredentialMetadataUsesShortLivedCache(t *testing.T) {
 	ctx := context.Background()
 	service, accounts := openAccountService(t)
 	var calls atomic.Int32
@@ -72,16 +72,28 @@ func TestBuildBotFlagSummaryUsesShortLivedCache(t *testing.T) {
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("metadata inspections = %d, want 1", got)
 	}
-	service.invalidateBuildBotFlagCache()
-	if _, err := service.buildBotFlaggedAccountIDs(ctx); err != nil {
+	if _, err := service.buildBFSAccountIDs(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.buildBFSAccountIDs(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if got := calls.Load(); got != 2 {
-		t.Fatalf("metadata inspections after invalidation = %d, want 2", got)
+		t.Fatalf("BFS metadata inspections = %d, want 2", got)
+	}
+	service.invalidateBuildCredentialMetadataCache()
+	if _, err := service.buildBotFlaggedAccountIDs(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.buildBFSAccountIDs(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 4 {
+		t.Fatalf("metadata inspections after invalidation = %d, want 4", got)
 	}
 }
 
-func TestAccountViewsIncludeBuildBotFlagMetadata(t *testing.T) {
+func TestAccountViewsIncludeBuildCredentialMetadata(t *testing.T) {
 	ctx := context.Background()
 	service, accounts := openAccountService(t)
 	service.providers = provider.NewRegistry(credentialMetadataAdapterStub{})
@@ -121,8 +133,23 @@ func TestAccountViewsIncludeBuildBotFlagMetadata(t *testing.T) {
 	if err != nil || total != 1 || len(views) != 1 || views[0].Credential.ID != normal.ID {
 		t.Fatalf("normal views=%#v total=%d err=%v", views, total, err)
 	}
+	views, total, err = service.List(ctx, 1, 20, "", ListFilter{Provider: string(accountdomain.ProviderBuild), BFS: "present"})
+	if err != nil || total != 1 || len(views) != 1 || views[0].Credential.ID != normal.ID || !views[0].BuildBFS {
+		t.Fatalf("bfs-present views=%#v total=%d err=%v", views, total, err)
+	}
+	views, total, err = service.List(ctx, 1, 20, "", ListFilter{Provider: string(accountdomain.ProviderBuild), BFS: "absent"})
+	if err != nil || total != 1 || len(views) != 1 || views[0].Credential.ID != build.ID || views[0].BuildBFS {
+		t.Fatalf("bfs-absent views=%#v total=%d err=%v", views, total, err)
+	}
+	views, total, err = service.List(ctx, 1, 20, "", ListFilter{Provider: string(accountdomain.ProviderBuild), Risk: "normal", BFS: "present"})
+	if err != nil || total != 1 || len(views) != 1 || views[0].Credential.ID != normal.ID {
+		t.Fatalf("combined views=%#v total=%d err=%v", views, total, err)
+	}
 	if _, _, err := service.List(ctx, 1, 20, "", ListFilter{Provider: string(accountdomain.ProviderWeb), Risk: "flagged"}); !errors.Is(err, ErrInvalidFilter) {
 		t.Fatalf("non-Build risk filter err = %v", err)
+	}
+	if _, _, err := service.List(ctx, 1, 20, "", ListFilter{Provider: string(accountdomain.ProviderWeb), BFS: "present"}); !errors.Is(err, ErrInvalidFilter) {
+		t.Fatalf("non-Build bfs filter err = %v", err)
 	}
 	summary, err := service.Summary(ctx)
 	if err != nil || summary.Risk != 1 {

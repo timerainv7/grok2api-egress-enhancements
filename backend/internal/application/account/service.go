@@ -84,7 +84,10 @@ const (
 )
 
 const permanentRefreshExpiredReason = "OAuth refresh token 已永久失效且 access token 已过期"
-const buildBotFlagCacheKey = "build-bot-flagged-account-ids"
+const (
+	buildBotFlagCacheKey = "build-bot-flagged-account-ids"
+	buildBFSCacheKey     = "build-bfs-account-ids"
+)
 
 type webQuotaRefreshState struct {
 	generation          uint64
@@ -157,6 +160,7 @@ type View struct {
 	Quota           QuotaView
 	QuotaWindows    []accountdomain.QuotaWindow
 	BuildBotFlagged bool
+	BuildBFS        bool
 }
 
 type UpdateInput struct {
@@ -268,6 +272,7 @@ type ListFilter struct {
 	Egress    string
 	Renewal   string
 	Risk      string
+	BFS       string
 	// Agreement applies only to grok_web accounts.
 	Agreement string
 	// Association values are provider-specific: Web supports build, console, and combined filters;
@@ -367,9 +372,9 @@ type Service struct {
 	autoClean             AutoCleanConfig
 	autoCleanRevision     uint64
 	autoCleanWake         chan struct{}
-	buildBotFlagCache     *resultcache.Cache[string, []uint64]
-	logger                *slog.Logger
-	now                   func() time.Time
+	buildCredentialMetadataCache *resultcache.Cache[string, []uint64]
+	logger                       *slog.Logger
+	now                          func() time.Time
 }
 
 func (s *Service) SetQuotaRecoveryQueue(queue repository.QuotaRecoveryQueue) {
@@ -419,11 +424,11 @@ func NewService(accounts repository.AccountRepository, audits repository.AuditRe
 		autoClean: AutoCleanConfig{
 			Enabled: false, Interval: 10 * time.Minute, MinAge: time.Hour, IncludeDisabled: false,
 		},
-		autoCleanWake:     make(chan struct{}, 1),
-		buildBotFlagCache: resultcache.New[string, []uint64](1, buildBotFlagCacheTTL),
-		conversionPool:    batch.NewPool(25), syncPool: batch.NewPool(25), refreshPool: batch.NewPool(25), detectPool: batch.NewPool(32),
-		logger: slog.Default(),
-		now:    func() time.Time { return time.Now().UTC() },
+		autoCleanWake:               make(chan struct{}, 1),
+		buildCredentialMetadataCache: resultcache.New[string, []uint64](2, buildBotFlagCacheTTL),
+		conversionPool:              batch.NewPool(25), syncPool: batch.NewPool(25), refreshPool: batch.NewPool(25), detectPool: batch.NewPool(32),
+		logger:                      slog.Default(),
+		now:                         func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -477,6 +482,8 @@ func (s *Service) List(ctx context.Context, page, pageSize int, search string, f
 		!oneOf(filter.Renewal, "", "refreshable", "unrefreshable") ||
 		!oneOf(filter.Risk, "", "flagged", "normal") ||
 		(filter.Risk != "" && filter.Provider != string(accountdomain.ProviderBuild)) ||
+		!oneOf(filter.BFS, "", "present", "absent") ||
+		(filter.BFS != "" && filter.Provider != string(accountdomain.ProviderBuild)) ||
 		!oneOf(filter.Agreement, "", "nsfwEnabled", "nsfwDisabled", "termsAccepted", "termsNotAccepted", "allAccepted", "allNotAccepted") ||
 		(filter.Agreement != "" && filter.Provider != string(accountdomain.ProviderWeb)) ||
 		!validAssociationFilter(filter.Provider, filter.Association) ||
@@ -503,6 +510,24 @@ func (s *Service) List(ctx context.Context, page, pageSize int, search string, f
 			repositoryFilter.RestrictIDs = true
 		} else {
 			repositoryFilter.ExcludeIDs = flaggedIDs
+		}
+	}
+	if filter.BFS != "" {
+		bfsIDs, err := s.buildBFSAccountIDs(ctx)
+		if err != nil {
+			return nil, 0, err
+		}
+		if filter.BFS == "present" {
+			if repositoryFilter.RestrictIDs {
+				repositoryFilter.AccountIDs = intersectAccountIDs(repositoryFilter.AccountIDs, bfsIDs)
+			} else {
+				repositoryFilter.AccountIDs = bfsIDs
+				repositoryFilter.RestrictIDs = true
+			}
+		} else if repositoryFilter.RestrictIDs {
+			repositoryFilter.AccountIDs = excludeAccountIDs(repositoryFilter.AccountIDs, bfsIDs)
+		} else {
+			repositoryFilter.ExcludeIDs = appendUniqueAccountIDs(repositoryFilter.ExcludeIDs, bfsIDs)
 		}
 	}
 	values, total, err := s.accounts.List(ctx, repository.AccountListQuery{
@@ -535,7 +560,7 @@ func (s *Service) List(ctx context.Context, page, pageSize int, search string, f
 	views := make([]View, 0, len(values))
 	for _, value := range values {
 		metadata := s.credentialMetadata(value)
-		view := View{Credential: value, BuildBotFlagged: metadata.BuildBotFlagged}
+		view := View{Credential: value, BuildBotFlagged: metadata.BuildBotFlagged, BuildBFS: metadata.BuildBFS}
 		if billing, ok := billings[value.ID]; ok {
 			view.Billing = &billing
 		}
@@ -551,11 +576,20 @@ func (s *Service) List(ctx context.Context, page, pageSize int, search string, f
 }
 
 func (s *Service) buildBotFlaggedAccountIDs(ctx context.Context) ([]uint64, error) {
-	if s.buildBotFlagCache == nil {
+	if s.buildCredentialMetadataCache == nil {
 		return s.loadBuildBotFlaggedAccountIDs(ctx)
 	}
-	return s.buildBotFlagCache.Load(ctx, buildBotFlagCacheKey, s.now(), func() ([]uint64, error) {
+	return s.buildCredentialMetadataCache.Load(ctx, buildBotFlagCacheKey, s.now(), func() ([]uint64, error) {
 		return s.loadBuildBotFlaggedAccountIDs(ctx)
+	})
+}
+
+func (s *Service) buildBFSAccountIDs(ctx context.Context) ([]uint64, error) {
+	if s.buildCredentialMetadataCache == nil {
+		return s.loadBuildBFSAccountIDs(ctx)
+	}
+	return s.buildCredentialMetadataCache.Load(ctx, buildBFSCacheKey, s.now(), func() ([]uint64, error) {
+		return s.loadBuildBFSAccountIDs(ctx)
 	})
 }
 
@@ -580,9 +614,31 @@ func (s *Service) loadBuildBotFlaggedAccountIDs(ctx context.Context) ([]uint64, 
 	}
 }
 
-func (s *Service) invalidateBuildBotFlagCache() {
-	if s.buildBotFlagCache != nil {
-		s.buildBotFlagCache.Delete(buildBotFlagCacheKey)
+func (s *Service) loadBuildBFSAccountIDs(ctx context.Context) ([]uint64, error) {
+	const batchSize = 500
+	result := make([]uint64, 0)
+	var afterID uint64
+	for {
+		values, _, err := s.accounts.ListProviderAccountBatch(ctx, accountdomain.ProviderBuild, afterID, batchSize)
+		if err != nil {
+			return nil, err
+		}
+		for _, value := range values {
+			if s.credentialMetadata(value).BuildBFS {
+				result = append(result, value.ID)
+			}
+		}
+		if len(values) < batchSize {
+			return result, nil
+		}
+		afterID = values[len(values)-1].ID
+	}
+}
+
+func (s *Service) invalidateBuildCredentialMetadataCache() {
+	if s.buildCredentialMetadataCache != nil {
+		s.buildCredentialMetadataCache.Delete(buildBotFlagCacheKey)
+		s.buildCredentialMetadataCache.Delete(buildBFSCacheKey)
 	}
 }
 
@@ -613,6 +669,48 @@ func parseEgressFilter(value string) (mode string, nodeID uint64, sourceID uint6
 	default:
 		return "", 0, 0, false
 	}
+}
+
+func intersectAccountIDs(left, right []uint64) []uint64 {
+	allowed := make(map[uint64]struct{}, len(right))
+	for _, id := range right {
+		allowed[id] = struct{}{}
+	}
+	result := make([]uint64, 0, len(left))
+	for _, id := range left {
+		if _, ok := allowed[id]; ok {
+			result = append(result, id)
+		}
+	}
+	return result
+}
+
+func excludeAccountIDs(values, excluded []uint64) []uint64 {
+	excludedSet := make(map[uint64]struct{}, len(excluded))
+	for _, id := range excluded {
+		excludedSet[id] = struct{}{}
+	}
+	result := make([]uint64, 0, len(values))
+	for _, id := range values {
+		if _, ok := excludedSet[id]; !ok {
+			result = append(result, id)
+		}
+	}
+	return result
+}
+
+func appendUniqueAccountIDs(values, additional []uint64) []uint64 {
+	seen := make(map[uint64]struct{}, len(values)+len(additional))
+	for _, id := range values {
+		seen[id] = struct{}{}
+	}
+	for _, id := range additional {
+		if _, ok := seen[id]; !ok {
+			values = append(values, id)
+			seen[id] = struct{}{}
+		}
+	}
+	return values
 }
 
 func oneOf(value string, allowed ...string) bool {
@@ -770,7 +868,7 @@ func (s *Service) batchDeleteWithLinkedMode(ctx context.Context, providerValue a
 	}
 	s.finishLinkedDelete(ctx, outcome.DeletedIDs)
 	if outcome.Deleted > 0 {
-		s.invalidateBuildBotFlagCache()
+		s.invalidateBuildCredentialMetadataCache()
 	}
 	return accountDeleteResultFromOutcome(providerValue, outcome), nil
 }
@@ -869,7 +967,7 @@ func (s *Service) CleanupAccounts(ctx context.Context, providerValue accountdoma
 		}
 	}
 	if out.Deleted > 0 {
-		s.invalidateBuildBotFlagCache()
+		s.invalidateBuildCredentialMetadataCache()
 	}
 	return out, nil
 }
@@ -900,7 +998,7 @@ func (s *Service) Get(ctx context.Context, id uint64) (View, error) {
 		return View{}, mapRepositoryError(err)
 	}
 	metadata := s.credentialMetadata(value)
-	view := View{Credential: value, BuildBotFlagged: metadata.BuildBotFlagged}
+	view := View{Credential: value, BuildBotFlagged: metadata.BuildBotFlagged, BuildBFS: metadata.BuildBFS}
 	if billing, err := s.accounts.GetBilling(ctx, id); err == nil {
 		view.Billing = &billing
 	} else if !errors.Is(err, repository.ErrNotFound) {
@@ -2183,7 +2281,7 @@ func (s *Service) ensureCredential(ctx context.Context, value accountdomain.Cred
 		if err != nil {
 			return nil, err
 		}
-		s.invalidateBuildBotFlagCache()
+		s.invalidateBuildCredentialMetadataCache()
 		s.markRefreshSuccess(latest.ID, currentTime)
 		s.WakeCredentialRefresh()
 		return updated, nil
@@ -3690,7 +3788,7 @@ func (s *Service) persistSeed(ctx context.Context, seed provider.CredentialSeed)
 	}
 	stored, created, err := s.accounts.UpsertByIdentity(ctx, value)
 	if err == nil {
-		s.invalidateBuildBotFlagCache()
+		s.invalidateBuildCredentialMetadataCache()
 		s.WakeCredentialRefresh()
 	}
 	return stored, created, err

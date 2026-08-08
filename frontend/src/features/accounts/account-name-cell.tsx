@@ -119,17 +119,31 @@ export function AccountNameCell({ account }: { account: AccountDTO }) {
             </span>
           </>
         ) : null}
-        {account.buildBotFlagged ? (
+        {account.buildBotFlagged || account.buildBfs ? (
           <>
             <span className="mx-2 h-3 w-px shrink-0 bg-border" aria-hidden="true" />
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span tabIndex={0} aria-label={t("accounts.botRisk")} className="inline-flex cursor-help text-amber-500 focus-visible:outline-none dark:text-amber-400">
-                  <Bot className="size-3.5" />
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>{t("accounts.botRiskTooltip")}</TooltipContent>
-            </Tooltip>
+            <span className="flex items-center gap-1.5">
+              {account.buildBotFlagged ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span tabIndex={0} aria-label={t("accounts.botRisk")} className="inline-flex cursor-help text-amber-500 focus-visible:outline-none dark:text-amber-400">
+                      <Bot className="size-3.5" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>{t("accounts.botRiskTooltip")}</TooltipContent>
+                </Tooltip>
+              ) : null}
+              {account.buildBfs ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span tabIndex={0} aria-label={t("accounts.bfsPresent")} className="inline-flex cursor-help rounded border border-sky-500/50 px-1 text-[10px] font-semibold leading-4 text-sky-600 focus-visible:outline-none dark:text-sky-400">
+                      BFS
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>{t("accounts.bfsTooltip")}</TooltipContent>
+                </Tooltip>
+              ) : null}
+            </span>
           </>
         ) : null}
       </div>

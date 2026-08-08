@@ -207,7 +207,7 @@ func (s *Service) runAutoCleanReauthRevision(ctx context.Context, cfg AutoCleanC
 	}
 	limitReached = !exhausted && (scanBatches == autoCleanReauthMaxScans || deleteBatches == autoCleanReauthMaxDeletes)
 	if deleted > 0 {
-		s.invalidateBuildBotFlagCache()
+		s.invalidateBuildCredentialMetadataCache()
 	}
 	if scanned > 0 || deleted > 0 || skipped > 0 {
 		s.logger.Info("auto_clean_reauth", "deleted", deleted, "scanned", scanned, "skipped", skipped, "active_skipped", activeSkipped, "scan_batches", scanBatches, "delete_batches", deleteBatches, "limit_reached", limitReached, "min_age", cfg.MinAge.String(), "include_disabled", cfg.IncludeDisabled)

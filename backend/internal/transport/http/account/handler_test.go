@@ -19,20 +19,22 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func TestNewAccountResponseExposesBuildBotFlagOnlyForBuild(t *testing.T) {
+func TestNewAccountResponseExposesBuildCredentialMetadataOnlyForBuild(t *testing.T) {
 	now := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
 	build := newAccountResponse(accountapp.View{
 		Credential:      accountdomain.Credential{Provider: accountdomain.ProviderBuild, BuildRouteMode: accountdomain.BuildRouteXAI, WebNSFWEnabledAt: &now, WebTermsAcceptedAt: &now},
 		BuildBotFlagged: true,
+		BuildBFS:        true,
 	})
-	if !build.BuildBotFlagged || build.BuildRouteMode != string(accountdomain.BuildRouteXAI) || build.WebNSFWEnabledAt == nil || !build.WebNSFWEnabledAt.Equal(now) || build.WebTermsAcceptedAt == nil || !build.WebTermsAcceptedAt.Equal(now) {
+	if !build.BuildBotFlagged || !build.BuildBFS || build.BuildRouteMode != string(accountdomain.BuildRouteXAI) || build.WebNSFWEnabledAt == nil || !build.WebNSFWEnabledAt.Equal(now) || build.WebTermsAcceptedAt == nil || !build.WebTermsAcceptedAt.Equal(now) {
 		t.Fatalf("Build metadata = %#v", build)
 	}
 	web := newAccountResponse(accountapp.View{
 		Credential:      accountdomain.Credential{Provider: accountdomain.ProviderWeb, WebNSFWEnabledAt: &now, WebTermsAcceptedAt: &now},
 		BuildBotFlagged: true,
+		BuildBFS:        true,
 	})
-	if web.BuildBotFlagged || web.BuildRouteMode != string(accountdomain.BuildRouteAuto) || web.WebNSFWEnabledAt == nil || !web.WebNSFWEnabledAt.Equal(now) || web.WebTermsAcceptedAt == nil || !web.WebTermsAcceptedAt.Equal(now) {
+	if web.BuildBotFlagged || web.BuildBFS || web.BuildRouteMode != string(accountdomain.BuildRouteAuto) || web.WebNSFWEnabledAt == nil || !web.WebNSFWEnabledAt.Equal(now) || web.WebTermsAcceptedAt == nil || !web.WebTermsAcceptedAt.Equal(now) {
 		t.Fatalf("non-Build metadata = %#v", web)
 	}
 }
